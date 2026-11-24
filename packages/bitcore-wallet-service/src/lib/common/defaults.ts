@@ -19,6 +19,8 @@ export const Defaults = {
   // TODO: should allow different gap sizes for external/internal chains
   SCAN_ADDRESS_GAP: 30,
 
+  MAX_SCAN_STARTING_STEP: 1000,
+
   // Lookback window (in seconds) for scanning broadcasted txps during nonce assignment
   BROADCASTED_NONCE_SCAN_WINDOW: 24 * 3600,
 

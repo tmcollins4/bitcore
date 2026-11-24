@@ -5011,18 +5011,24 @@ export class WalletService implements IWalletService {
     });
   }
 
+  _isValidScanStartingStep(startingStep) {
+    return !startingStep || (
+      Number.isInteger(startingStep) && startingStep > 0 && startingStep <= Defaults.MAX_SCAN_STARTING_STEP
+    );
+  }
+
   /**
    * Scan the blockchain looking for addresses having some activity
    *
    * @param {Object} opts
    * @param {Boolean} opts.includeCopayerBranches (defaults to false)
-   * @param {Boolean} opts.startingStep (estimate address number magniture (dflt to 1k), only
+   * @param {Number} opts.startingStep (initial scan step, at most 1000; defaults to 1000)
    * @param {Number} opts.startIdx (optional) start scanning from this index
-   * for optimization)
    */
   scan(opts, cb) {
     opts = opts || {};
-    opts.startingStep = opts.startingStep || 1000;
+    if (!this._isValidScanStartingStep(opts.startingStep)) return cb(new ClientError('Invalid startingStep'));
+    opts.startingStep = opts.startingStep || Defaults.MAX_SCAN_STARTING_STEP;
 
     this.getWallet({}, (err, wallet) => {
       if (err) return cb(err);
@@ -5179,9 +5185,12 @@ export class WalletService implements IWalletService {
    *
    * @param {Object} opts
    * @param {Boolean} opts.includeCopayerBranches (defaults to false)
+   * @param {Number} opts.startingStep (initial scan step, at most 1000; defaults to 1000)
    * @param {Number} opts.startIdx (optional) address derivation path start index (support agents only)
    */
   startScan(opts, cb) {
+    if (!this._isValidScanStartingStep(opts?.startingStep)) return cb(new ClientError('Invalid startingStep'));
+
     const scanFinished = err => {
       const data = {
         result: err ? 'error' : 'success',

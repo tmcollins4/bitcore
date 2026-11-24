@@ -10865,6 +10865,111 @@ describe('Wallet service', function() {
     });
   });
 
+  describe('#scan startingStep validation', function() {
+    let server: WalletService;
+    let wallet: Model.Wallet;
+
+    beforeEach(async function() {
+      this.timeout(5000);
+      sinon.stub(Defaults, 'SCAN_ADDRESS_GAP').value(2);
+      ({ server, wallet } = await helpers.createAndJoinWallet(1, 1));
+      helpers.stubAddressActivity([]);
+    });
+
+    afterEach(function() {
+      server.messageBroker.removeAllListeners();
+    });
+
+    function startAndWait(opts): Promise<any> {
+      return new Promise((resolve, reject) => {
+        const onMessage = notification => {
+          if (notification.type !== 'ScanFinished') return;
+          server.messageBroker.offMessage(onMessage);
+          resolve(notification);
+        };
+        server.messageBroker.onMessage(onMessage);
+        server.startScan(opts, err => {
+          if (err) {
+            server.messageBroker.offMessage(onMessage);
+            reject(err);
+          }
+        });
+      });
+    }
+
+    async function readState() {
+      const db = server.storage.db;
+      return Promise.all([
+        db.collection('wallets').find({ id: wallet.id }).toArray(),
+        db.collection('addresses').find({ walletId: wallet.id }).toArray(),
+        db.collection('cache').find({ walletId: wallet.id }).toArray(),
+        db.collection('locks').find({}).toArray(),
+        db.collection('notifications').find({ walletId: wallet.id }).toArray()
+      ]);
+    }
+
+    for (const method of ['scan', 'startScan'] as const) {
+      it(`${method} rejects an oversized step without changing persisted state and allows a later scan`, async function() {
+        this.timeout(10000);
+        await util.promisify(server.createAddress).call(server, {});
+        wallet = await util.promisify(server.getWallet).call(server, {});
+        wallet.beRegistered = true;
+        wallet.scanStatus = 'success';
+        await util.promisify(server.storage.storeWallet).call(server.storage, wallet);
+        await server.storage.db.collection('addresses').updateMany({ walletId: wallet.id }, { $set: { beRegistered: true } });
+        await server.storage.db.collection('cache').insertOne({ walletId: wallet.id, type: 'test', key: 'preserve' });
+        const before = await readState();
+        const deregister = sinon.spy(server.storage, 'deregisterWallet');
+        const clearCache = sinon.spy(server.storage, 'clearWalletCache');
+        const runLocked = sinon.spy(server.lock, 'runLocked');
+        const runScan = sinon.spy(server, '_runScan');
+        const notify = sinon.spy(server, '_notify');
+
+        // Stay just above the cap so a broken guard fails safely without reproducing an OOM.
+        const err: any = await new Promise(resolve => server[method]({ startingStep: 1001 }, resolve));
+        should.exist(err);
+        err.should.be.instanceof(ClientError);
+        err.code.should.equal('BADREQUEST');
+        deregister.called.should.equal(false);
+        clearCache.called.should.equal(false);
+        runLocked.called.should.equal(false);
+        runScan.called.should.equal(false);
+        notify.called.should.equal(false);
+        (await readState()).should.deep.equal(before);
+
+        if (method === 'startScan') {
+          const notification = await startAndWait({ startingStep: 1000 });
+          notification.data.result.should.equal('success');
+        } else {
+          await util.promisify(server.scan).call(server, {});
+          runScan.firstCall.args[1].should.equal(1000);
+        }
+        const recovered = await util.promisify(server.getWallet).call(server, {});
+        recovered.scanStatus.should.equal('success');
+        const address = await util.promisify(server.createAddress).call(server, {});
+        address.path.should.equal('m/0/1');
+      });
+    }
+
+    it('records explorer failure and recovers on a later bounded scan', async function() {
+      this.timeout(10000);
+      blockchainExplorer.getAddressActivity = sinon.stub().yields(new Error('Explorer unavailable'));
+      const failed = await startAndWait({ startingStep: 1000 });
+      failed.data.result.should.equal('error');
+      const failedWallet = await util.promisify(server.getWallet).call(server, {});
+      failedWallet.scanStatus.should.equal('error');
+      (await util.promisify(server.storage.fetchAddresses).call(server.storage, wallet.id)).should.be.empty;
+
+      helpers.stubAddressActivity([]);
+      const recovered = await startAndWait({ startingStep: 1000 });
+      recovered.data.result.should.equal('success');
+      const recoveredWallet = await util.promisify(server.getWallet).call(server, {});
+      recoveredWallet.scanStatus.should.equal('success');
+      const address = await util.promisify(server.createAddress).call(server, {});
+      address.path.should.equal('m/0/0');
+    });
+  });
+
   describe('#scan', function() {
     let server: WalletService;
     let wallet: Model.Wallet;

@@ -1036,6 +1036,50 @@ describe('ExpressApp', function() {
         });
       });
 
+      describe('Scan startingStep validation', function() {
+        let server: WalletService;
+        let getWallet;
+
+        beforeEach(function() {
+          server = Object.create(WalletService.prototype) as WalletService;
+          getWallet = sandbox.stub(server, 'getWallet').callsArgWith(1, null, {
+            isComplete: () => true,
+            singleAddress: true,
+            chain: 'btc'
+          });
+          sandbox.stub(WalletService, 'initialize').callsArg(1);
+          sandbox.stub(WalletService, 'getInstanceWithAuth').callsArgWith(1, null, server);
+        });
+
+        // Keep representative range and JSON-type failures; the unit suite covers the full matrix.
+        for (const startingStep of [1001, '1']) {
+          it(`rejects startingStep=${JSON.stringify(startingStep)} before accessing wallet state`, function(done) {
+            start(ExpressApp, function() {
+              const options = {
+                url: testHost + ':' + testPort + config.basePath + '/v1/addresses/scan/',
+                headers: { 'x-identity': 'identity', 'x-signature': 'signature' },
+                method: 'post',
+                json: true,
+                body: { startingStep }
+              };
+              request(options, function(err, res, body) {
+                should.not.exist(err);
+                res.statusCode.should.equal(400);
+                body.code.should.equal('BADREQUEST');
+                getWallet.called.should.equal(false);
+                // A valid request still reaches the established single-address no-op.
+                request({ ...options, body: {} }, function(err, res) {
+                  should.not.exist(err);
+                  res.statusCode.should.equal(200);
+                  getWallet.calledOnce.should.equal(true);
+                  done();
+                });
+              });
+            });
+          });
+        }
+      });
+
       describe('Clear cache', function() {
         it('/v1/clearcache/', function(done) {
           const resolveStub = sinon.stub().callsFake( () => { return Promise.resolve(true);});
